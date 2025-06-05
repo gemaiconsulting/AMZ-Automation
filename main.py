@@ -333,11 +333,20 @@ def download_company_data_sheet():
 def sanitize_folder_name(name: str) -> str:
     """
     Sanitize folder name to be compatible with SharePoint:
-    - Remove invalid characters: \ / : * ? " < > | # { } % ~ & 
-    - Strip trailing dots and spaces
+      • Remove invalid characters: \ / : * ? " < > | # { } % ~ & ,
+      • Collapse runs of whitespace into a single space,
+      • Trim leading/trailing spaces,
+      • Strip any trailing dot.
     """
-    cleaned = re.sub(r'[\\/:*?"<>|#{}%~&]', '', name)
-    cleaned = cleaned.strip().rstrip('.')
+    # 1) Remove “hard” illegal chars plus comma
+    cleaned = re.sub(r'[\\/:*?"<>|#{}%~&,]', '', name)
+
+    # 2) Collapse any run of whitespace into a single space
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    # 3) If it ends with a dot, strip it off
+    cleaned = cleaned.rstrip('.')
+
     return cleaned
 
 
