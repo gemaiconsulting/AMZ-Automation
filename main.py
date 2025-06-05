@@ -346,17 +346,20 @@ def get_or_create_client_folder(company_name):
     Check if a client folder exists under '01. CLIENTS'; if not, create it.
     Return the folder ID.
     """
+    safe_name = sanitize_folder_name(company_name)
+
     url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{CLIENTS_FOLDER_ID}/children"
     response = requests.get(url, headers=HEADERS_MS)
     if response.status_code == 200:
         folders = response.json().get("value", [])
         for folder in folders:
-            if folder["name"] == company_name:
+            if folder["name"] == safe_name:
                 return folder["id"]
+
     # Create new folder
     create_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{CLIENTS_FOLDER_ID}/children"
     payload = {
-        "name": company_name,
+        "name": safe_name,
         "folder": {},
         "@microsoft.graph.conflictBehavior": "fail"
     }
@@ -364,7 +367,7 @@ def get_or_create_client_folder(company_name):
     if create_resp.status_code == 201:
         return create_resp.json()["id"]
     else:
-        print(f"❌ Failed to create folder '{company_name}': {create_resp.json()}")
+        print(f"❌ Failed to create folder '{safe_name}': {create_resp.json()}")
         return None
 
 def copy_subfolders_to_client(client_folder_id):
