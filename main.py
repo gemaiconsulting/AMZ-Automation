@@ -5,6 +5,7 @@ AMZ-Automation: Fetch data from HubSpot, update Excel, and generate/upload NDAs,
 
 import os
 import time
+import re
 import io
 import requests
 import pandas as pd
@@ -326,6 +327,19 @@ def download_company_data_sheet():
     else:
         print(f"❌ Failed to download ClientData.xlsx: {response.json()}")
         return None
+
+
+
+def sanitize_folder_name(name: str) -> str:
+    """
+    Sanitize folder name to be compatible with SharePoint:
+    - Remove invalid characters: \ / : * ? " < > | # { } % ~ & 
+    - Strip trailing dots and spaces
+    """
+    cleaned = re.sub(r'[\\/:*?"<>|#{}%~&]', '', name)
+    cleaned = cleaned.strip().rstrip('.')
+    return cleaned
+
 
 def get_or_create_client_folder(company_name):
     """
