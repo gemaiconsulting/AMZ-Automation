@@ -37,7 +37,6 @@ HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 
 # OneDrive / Excel file IDs
 CLIENT_DATA_FILE_ID  = os.getenv("CLIENT_DATA_FILE_ID")   # ID of ClientData.xlsx
-CLIENTS_FOLDER_ID    = os.getenv("CLIENTS_FOLDER_ID")     # ID of '01. CLIENTS'
 TEMPLATES_FOLDER_ID  = os.getenv("TEMPLATES_FOLDER_ID")   # ID of '02. Internal'
 
 # Subfolder IDs (under '02. Internal')
@@ -68,6 +67,10 @@ SOW_TEMPLATE_CONSULTING_SERVICES_ID       = os.getenv("SOW_TEMPLATE_CONSULTING_S
 
 # MSA Template
 MSA_TEMPLATE_ID = os.getenv("MSA_TEMPLATE_ID")
+
+# Remove hardcoded folder IDs and use environment variables
+VENDORS_PARTNERS_FOLDER_ID = os.getenv("VENDORS_FOLDER_ID")
+CLIENTS_FOLDER_ID = os.getenv("CLIENTS_FOLDER_ID")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -304,14 +307,6 @@ upload_file_to_onedrive(EXCEL_PATH)
 # CREATE CLIENT FOLDERS & COPY SUBFOLDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-SUBFOLDERS = {
-    "01. NDA":           SUBFOLDER_01_NDA_ID,
-    "02. Proposals":     SUBFOLDER_02_PROPOSALS_ID,
-    "03. Contracts":     SUBFOLDER_03_CONTRACTS_ID,
-    "04. SOWs":          SUBFOLDER_04_SOWS_ID,
-    "05. MSAs":          SUBFOLDER_05_MSAS_ID
-}
-
 def download_company_data_sheet():
     """
     Download ClientData.xlsx from SharePoint and return the 'Companies' sheet as a DataFrame.
@@ -328,8 +323,6 @@ def download_company_data_sheet():
         print(f"❌ Failed to download ClientData.xlsx: {response.json()}")
         return None
 
-
-
 def sanitize_folder_name(name: str) -> str:
     """
     Sanitize folder name to be compatible with SharePoint:
@@ -338,7 +331,7 @@ def sanitize_folder_name(name: str) -> str:
       • Trim leading/trailing spaces,
       • Strip any trailing dot.
     """
-    # 1) Remove “hard” illegal chars plus comma
+    # 1) Remove "hard" illegal chars plus comma
     cleaned = re.sub(r'[\\/:*?"<>|#{}%~&,]', '', name)
 
     # 2) Collapse any run of whitespace into a single space
@@ -349,24 +342,27 @@ def sanitize_folder_name(name: str) -> str:
 
     return cleaned
 
-
-def get_or_create_client_folder(company_name):
+def get_or_create_company_folder(company_name, company_type):
     """
-    Check if a client folder exists under '01. CLIENTS'; if not, create it.
-    Return the folder ID.
+    Create a folder for the company in the correct parent folder based on type.
+    Returns the folder ID and a flag indicating if subfolders should be created (True for clients, False for vendors/partners).
     """
     safe_name = sanitize_folder_name(company_name)
-
-    url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{CLIENTS_FOLDER_ID}/children"
+    if company_type.strip().lower() in ["vendor", "partner"]:
+        parent_id = VENDORS_PARTNERS_FOLDER_ID
+        allow_subfolders = False
+    else:
+        parent_id = CLIENTS_FOLDER_ID
+        allow_subfolders = True
+    url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{parent_id}/children"
     response = requests.get(url, headers=HEADERS_MS)
     if response.status_code == 200:
         folders = response.json().get("value", [])
         for folder in folders:
             if folder["name"] == safe_name:
-                return folder["id"]
-
+                return folder["id"], allow_subfolders
     # Create new folder
-    create_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{CLIENTS_FOLDER_ID}/children"
+    create_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{parent_id}/children"
     payload = {
         "name": safe_name,
         "folder": {},
@@ -374,26 +370,12 @@ def get_or_create_client_folder(company_name):
     }
     create_resp = requests.post(create_url, headers=HEADERS_MS, json=payload)
     if create_resp.status_code == 201:
-        return create_resp.json()["id"]
+        return create_resp.json()["id"], allow_subfolders
     else:
         print(f"❌ Failed to create folder '{safe_name}': {create_resp.json()}")
-        return None
+        return None, allow_subfolders
 
-def copy_subfolders_to_client(client_folder_id):
-    """
-    Copy each subfolder template (NDA, Proposals, etc.) into the given client folder.
-    """
-    for folder_name, folder_id in SUBFOLDERS.items():
-        copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{folder_id}/copy"
-        payload = {
-            "parentReference": {"id": client_folder_id},
-            "name": folder_name
-        }
-        response = requests.post(copy_url, headers=HEADERS_MS, json=payload)
-        if response.status_code in [200, 202]:
-            time.sleep(2)  # allow time for the copy to complete
-
-# Download company list and create folders
+# Update the main folder creation loop
 companies_df = download_company_data_sheet()
 if companies_df is None:
     raise Exception("❌ Unable to load company data!")
@@ -401,13 +383,16 @@ if companies_df is None:
 company_names = companies_df["name"].dropna().unique().tolist()
 client_folders = {}
 
-for name in company_names:
-    folder_id = get_or_create_client_folder(name)
+for idx, row in companies_df.iterrows():
+    name = row.get("name")
+    ctype = str(row.get("type", "")).strip()
+    if not name:
+        continue
+    folder_id, allow_subfolders = get_or_create_company_folder(name, ctype)
     if folder_id:
-        client_folders[name] = folder_id
-        copy_subfolders_to_client(folder_id)
+        client_folders[name] = {"id": folder_id, "allow_subfolders": allow_subfolders}
 
-print("📂 All client folders and subfolders created:", client_folders)
+print("📂 All company folders created:", client_folders)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NDA GENERATION
@@ -457,6 +442,42 @@ def update_company_nda_status(company_id):
     if resp.status_code != 200:
         send_error_email("Company NDA Status Update Failed", resp.text)
 
+def get_or_create_subfolder(parent_folder_id, subfolder_name, template_folder_id):
+    """
+    Check if a subfolder exists in the parent folder; if not, create it by copying from template.
+    Returns the subfolder ID.
+    """
+    # Check if subfolder exists
+    url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{parent_folder_id}/children"
+    response = requests.get(url, headers=HEADERS_MS)
+    if response.status_code == 200:
+        folders = response.json().get("value", [])
+        for folder in folders:
+            if folder["name"] == subfolder_name:
+                return folder["id"]
+
+    # Create new subfolder by copying from template
+    copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_folder_id}/copy"
+    payload = {
+        "parentReference": {"id": parent_folder_id},
+        "name": subfolder_name
+    }
+    copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
+    if copy_resp.status_code not in [200, 202]:
+        print(f"❌ Failed to create subfolder '{subfolder_name}': {copy_resp.json()}")
+        return None
+
+    # Wait for copy to complete and get the new folder ID
+    time.sleep(2)
+    response = requests.get(url, headers=HEADERS_MS)
+    if response.status_code == 200:
+        folders = response.json().get("value", [])
+        for folder in folders:
+            if folder["name"] == subfolder_name:
+                return folder["id"]
+    
+    return None
+
 def generate_nda_for_company(company):
     """
     For each company (from HubSpot), generate and upload an NDA if needed.
@@ -465,6 +486,12 @@ def generate_nda_for_company(company):
     props = company["properties"]
     company_name = props.get("name", "Unknown Company")
     company_nda_status = (props.get("nda_status") or "").strip().lower()
+
+    # Check if subfolders are allowed for this company
+    allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
+    if not allow_subfolders:
+        print(f"⏩ Skipping NDA generation for vendor/partner: {company_name}")
+        return
 
     contact = fetch_primary_contact_nda(company_id)
     if not contact:
@@ -492,20 +519,19 @@ def generate_nda_for_company(company):
     if not client_folder:
         return
 
-    # Locate NDA subfolder
-    url_sub = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{client_folder['id']}/children"
+    # Create NDA subfolder if it doesn't exist
+    nda_folder_id = get_or_create_subfolder(
+        client_folder["id"],
+        "01. NDA",
+        SUBFOLDER_01_NDA_ID
     )
-    subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
-    nda_folder = next((f for f in subfolders if f["name"] == "01. NDA"), None)
-    if not nda_folder:
+    if not nda_folder_id:
         return
 
     contact_name = f"{contact.get('firstname','').strip()}_{contact.get('lastname','').strip()}"
     filename = f"AMZ Risk - {contact_type.title()} NDA - {contact_name} - {datetime.now().strftime('%Y%m%d')}.docx"
     copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
-    payload = {"parentReference": {"id": nda_folder["id"]}, "name": filename}
+    payload = {"parentReference": {"id": nda_folder_id}, "name": filename}
     copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
     if copy_resp.status_code not in [200, 202]:
         send_error_email("NDA Copy Failed", copy_resp.text)
@@ -515,7 +541,7 @@ def generate_nda_for_company(company):
     time.sleep(5)
     children_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{nda_folder['id']}/children"
+        f"/drive/items/{nda_folder_id}/children"
     )
     items = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
     copied_file = next((f for f in items if f["name"] == filename), None)
@@ -556,7 +582,7 @@ def generate_nda_for_company(company):
     # Upload filled NDA
     upload_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{nda_folder['id']}:/{filename}:/content"
+        f"/drive/items/{nda_folder_id}:/{filename}:/content"
     )
     with open(filename, "rb") as f:
         requests.put(upload_url, headers=HEADERS_MS, data=f)
@@ -670,6 +696,19 @@ def generate_proposal_for_deal(deal):
     if status != "generate":
         return
 
+    deal_id = deal["id"]
+    company_id = fetch_associated_company_id_for_deal(deal_id)
+    if not company_id:
+        return
+    company = fetch_company_data_for_proposal(company_id)
+    company_name = company.get("name", "Unknown Company")
+
+    # Check if subfolders are allowed for this company
+    allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
+    if not allow_subfolders:
+        print(f"⏩ Skipping Proposal generation for vendor/partner: {company_name}")
+        return
+
     raw = deal["properties"].get("proposal___service_line", [])
     service_lines = []
     if isinstance(raw, list):
@@ -679,16 +718,8 @@ def generate_proposal_for_deal(deal):
     if not service_lines:
         service_lines = ["Risk Assessment"]
 
-    deal_id = deal["id"]
     owner_id = deal["properties"].get("hubspot_owner_id")
     owner_name, owner_email = fetch_owner_details(owner_id)
-    company_id = fetch_associated_company_id_for_deal(deal_id)
-    if not company_id:
-        return
-
-    company = fetch_company_data_for_proposal(company_id)
-    contact = fetch_primary_contact_for_proposal(company_id)
-    company_name = company.get("name", "Unknown Company")
 
     # Locate client folder
     url_fldr = (
@@ -700,26 +731,25 @@ def generate_proposal_for_deal(deal):
     if not client_folder:
         return
 
-    # Locate Proposals subfolder
-    url_sub = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{client_folder['id']}/children"
+    # Create Proposals subfolder if it doesn't exist
+    proposals_folder_id = get_or_create_subfolder(
+        client_folder["id"],
+        "02. Proposals",
+        SUBFOLDER_02_PROPOSALS_ID
     )
-    subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
-    proposals_folder = next((f for f in subfolders if f["name"] == "02. Proposals"), None)
-    if not proposals_folder:
+    if not proposals_folder_id:
         return
 
     children_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{proposals_folder['id']}/children"
+        f"/drive/items/{proposals_folder_id}/children"
     )
     for service_line in service_lines:
         filename = (
             f"AMZ Risk - {company_name} - Proposal - {service_line} - "
             f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
-        if check_proposal_exists(proposals_folder["id"], filename):
+        if check_proposal_exists(proposals_folder_id, filename):
             continue
 
         template_id = PROPOSAL_TEMPLATES.get(service_line, PROPOSAL_TEMPLATES["Risk Assessment"])
@@ -727,7 +757,7 @@ def generate_proposal_for_deal(deal):
         copy_resp = requests.post(
             copy_url,
             headers=HEADERS_MS,
-            json={"parentReference": {"id": proposals_folder["id"]}, "name": filename}
+            json={"parentReference": {"id": proposals_folder_id}, "name": filename}
         )
         if copy_resp.status_code not in (200, 202):
             send_error_email("Proposal Copy Failed", copy_resp.text)
@@ -754,7 +784,7 @@ def generate_proposal_for_deal(deal):
 
         placeholders = {
             "{proposal___service_line}": service_line,
-            "{today’s date}":            datetime.now().strftime("%Y-%m-%d"),
+            "{today's date}":            datetime.now().strftime("%Y-%m-%d"),
             "{firstname}":               contact.get("firstname", ""),
             "{lastname}":                contact.get("lastname", ""),
             "{email}":                   contact.get("email", ""),
@@ -780,7 +810,7 @@ def generate_proposal_for_deal(deal):
 
         upload_url = (
             f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-            f"/drive/items/{proposals_folder['id']}:/{filename}:/content"
+            f"/drive/items/{proposals_folder_id}:/{filename}:/content"
         )
         with open(filename, "rb") as fd:
             requests.put(upload_url, headers=HEADERS_MS, data=fd)
@@ -829,14 +859,22 @@ SOW_TEMPLATES = {
 
 def generate_sow_for_deal(deal):
     """
-    For each deal, generate and upload a SOW if sow_status is 'generate'.
+    For each deal, generate and upload a SOW if needed.
     """
-    props = deal.get("properties", {})
-    sow_status = (props.get("sow_status") or "").strip().lower()
-    if sow_status != "generate":
+    deal_id = deal["id"]
+    company_id = fetch_associated_company_id_for_deal(deal_id)
+    if not company_id:
+        return
+    company = fetch_company_data_for_proposal(company_id)
+    company_name = company.get("name", "Unknown Company")
+
+    # Check if subfolders are allowed for this company
+    allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
+    if not allow_subfolders:
+        print(f"⏩ Skipping SOW generation for vendor/partner: {company_name}")
         return
 
-    raw = props.get("proposal___service_line", [])
+    raw = deal["properties"].get("proposal___service_line", [])
     service_lines = []
     if isinstance(raw, list):
         service_lines = [opt.get("value") for opt in raw if isinstance(opt, dict) and opt.get("value")]
@@ -845,15 +883,8 @@ def generate_sow_for_deal(deal):
     if not service_lines:
         service_lines = ["Risk Assessment"]
 
-    deal_id = deal.get("id")
-    owner_name, owner_email = fetch_owner_details(props.get("hubspot_owner_id"))
-    company_id = fetch_associated_company_id_for_deal(deal_id)
-    if not company_id:
-        return
-
-    company = fetch_company_data_for_proposal(company_id)
-    contact = fetch_primary_contact_for_proposal(company_id)
-    company_name = company.get("name", "Unknown Company")
+    owner_id = deal["properties"].get("hubspot_owner_id")
+    owner_name, owner_email = fetch_owner_details(owner_id)
 
     # Locate client folder
     url_fldr = (
@@ -922,7 +953,7 @@ def generate_sow_for_deal(deal):
 
         placeholders = {
             "{proposal___service_line}": service_line,
-            "{today’s date}":            datetime.now().strftime("%Y-%m-%d"),
+            "{today's date}":            datetime.now().strftime("%Y-%m-%d"),
             "{firstname}":               contact.get("firstname", ""),
             "{lastname}":                contact.get("lastname", ""),
             "{jobtitle}":                contact.get("jobtitle", ""),
@@ -1039,14 +1070,19 @@ def msa_file_exists(folder_id, prefix):
 
 def generate_msa_for_company(company):
     """
-    For each company, generate and upload an MSA if msa_status is 'generate'.
+    For each company, generate and upload an MSA if needed.
     """
-    props = company.get("properties", {})
-    comp_id = company.get("id")
-    comp_name = props.get("name", "Unknown")
-    comp_status = (props.get("msa_status") or "").lower().strip()
+    company_id = company["id"]
+    props = company["properties"]
+    company_name = props.get("name", "Unknown Company")
 
-    contact = fetch_primary_contact_for_msa(comp_id)
+    # Check if subfolders are allowed for this company
+    allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
+    if not allow_subfolders:
+        print(f"⏩ Skipping MSA generation for vendor/partner: {company_name}")
+        return
+
+    contact = fetch_primary_contact_for_msa(company_id)
     contact_status = (contact.get("msa_status") or "").lower().strip()
 
     # Locate client folder
@@ -1055,9 +1091,9 @@ def generate_msa_for_company(company):
         f"/drive/items/{CLIENTS_FOLDER_ID}/children"
     )
     folders = requests.get(url_fldr, headers=HEADERS_MS).json().get("value", [])
-    client_folder = next((f for f in folders if f["name"] == comp_name), None)
+    client_folder = next((f for f in folders if f["name"] == company_name), None)
     if not client_folder:
-        send_error_email("MSA Error", f"Folder not found for {comp_name}")
+        send_error_email("MSA Error", f"Folder not found for {company_name}")
         return
 
     # Locate MSA subfolder
@@ -1068,25 +1104,19 @@ def generate_msa_for_company(company):
     subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
     msa_folder = next((f for f in subfolders if f["name"] == "05. MSAs"), None)
     if not msa_folder:
-        send_error_email("MSA Error", f"MSA subfolder missing for {comp_name}")
+        send_error_email("MSA Error", f"MSA subfolder missing for {company_name}")
         return
 
-    prefix = f"AMZ Risk - MSA - {comp_name}"
+    prefix = f"AMZ Risk - MSA - {company_name}"
 
     # If already exists
     if msa_file_exists(msa_folder['id'], prefix):
         if contact_status == "generate":
             update_contact_msa_status(contact.get("id"))
-        if comp_status == "generate":
-            update_company_msa_status(comp_id)
         return
 
-    if comp_status != "generate" and contact_status != "generate":
+    if contact_status != "generate":
         return
-
-    # Propagate contact -> company if needed
-    if contact_status == "generate" and comp_status != "generate":
-        update_company_msa_status(comp_id)
 
     date_str = datetime.now().strftime('%Y%m%d')
     filename = f"{prefix} - {date_str}.docx"
@@ -1105,7 +1135,7 @@ def generate_msa_for_company(company):
             break
         time.sleep(2)
     else:
-        send_error_email("MSA Missing", f"Copy missing for {comp_name}")
+        send_error_email("MSA Missing", f"Copy missing for {company_name}")
         return
 
     # Download and replace placeholders
@@ -1116,7 +1146,7 @@ def generate_msa_for_company(company):
     ).json().get("value", [])
     new_file = next((f for f in files if f["name"] == filename), None)
     if not new_file:
-        send_error_email("MSA Missing", f"Copied MSA not found for {comp_name}")
+        send_error_email("MSA Missing", f"Copied MSA not found for {company_name}")
         return
     download_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
@@ -1128,7 +1158,7 @@ def generate_msa_for_company(company):
 
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
-        "{name}":       comp_name,
+        "{name}":       company_name,
         "{address}":    props.get("address", ""),
         "{city}":       props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
@@ -1160,10 +1190,8 @@ def generate_msa_for_company(company):
 
     if contact_status == "generate":
         update_contact_msa_status(contact.get("id"))
-    if comp_status == "generate":
-        update_company_msa_status(comp_id)
 
-    print(f"✅ MSA '{filename}' created and uploaded for {comp_name}!")
+    print(f"✅ MSA '{filename}' created and uploaded for {company_name}!")
 
 # Run MSA generation
 companies_for_msa = fetch_companies_for_msa()
