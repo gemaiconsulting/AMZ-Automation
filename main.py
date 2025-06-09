@@ -126,10 +126,14 @@ def clean_data(value):
 def send_error_email(subject, message):
     """
     Send an error email to itadmin@amzrisk.com via Outlook SMTP.
+    Uses environment variables for sender email and password.
+    Optionally allows SMTP server and port to be set via environment variables.
     """
-    sender    = "your_outlook_email@outlook.com"
+    sender    = os.getenv("SMTP_SENDER")      # e.g. your_outlook_email@outlook.com
     recipient = "itadmin@amzrisk.com"
-    password  = "your_outlook_app_password"
+    password  = os.getenv("SMTP_PASSWORD")    # your Outlook app password
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.office365.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
 
     msg = MIMEText(message)
     msg["Subject"] = subject
@@ -137,7 +141,7 @@ def send_error_email(subject, message):
     msg["To"]      = recipient
 
     try:
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.starttls()
             server.login(sender, password)
             server.sendmail(sender, recipient, msg.as_string())
@@ -487,11 +491,7 @@ def generate_nda_for_company(company):
     company_name = props.get("name", "Unknown Company")
     company_nda_status = (props.get("nda_status") or "").strip().lower()
 
-    # Check if subfolders are allowed for this company
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
-    if not allow_subfolders:
-        print(f"⏩ Skipping NDA generation for vendor/partner: {company_name}")
-        return
 
     contact = fetch_primary_contact_nda(company_id)
     if not contact:
@@ -509,29 +509,36 @@ def generate_nda_for_company(company):
     else:
         template_id = TEMPLATE_NDA_CORPORATE_ID
 
-    # Locate client folder in SharePoint
+    # Locate company folder in SharePoint
+    parent_id = VENDORS_PARTNERS_FOLDER_ID if not allow_subfolders else CLIENTS_FOLDER_ID
     url_fldr = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{CLIENTS_FOLDER_ID}/children"
+        f"/drive/items/{parent_id}/children"
     )
     folders = requests.get(url_fldr, headers=HEADERS_MS).json().get("value", [])
-    client_folder = next((f for f in folders if f["name"] == company_name), None)
-    if not client_folder:
+    company_folder = next((f for f in folders if f["name"] == company_name), None)
+    if not company_folder:
         return
 
-    # Create NDA subfolder if it doesn't exist
-    nda_folder_id = get_or_create_subfolder(
-        client_folder["id"],
-        "01. NDA",
-        SUBFOLDER_01_NDA_ID
-    )
-    if not nda_folder_id:
-        return
+    # Determine target folder for NDA
+    if allow_subfolders:
+        # Create NDA subfolder if it doesn't exist
+        nda_folder_id = get_or_create_subfolder(
+            company_folder["id"],
+            "01. NDA",
+            SUBFOLDER_01_NDA_ID
+        )
+        if not nda_folder_id:
+            return
+        target_folder_id = nda_folder_id
+    else:
+        # Vendors/partners: use company folder directly
+        target_folder_id = company_folder["id"]
 
     contact_name = f"{contact.get('firstname','').strip()}_{contact.get('lastname','').strip()}"
     filename = f"AMZ Risk - {contact_type.title()} NDA - {contact_name} - {datetime.now().strftime('%Y%m%d')}.docx"
     copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
-    payload = {"parentReference": {"id": nda_folder_id}, "name": filename}
+    payload = {"parentReference": {"id": target_folder_id}, "name": filename}
     copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
     if copy_resp.status_code not in [200, 202]:
         send_error_email("NDA Copy Failed", copy_resp.text)
@@ -541,7 +548,7 @@ def generate_nda_for_company(company):
     time.sleep(5)
     children_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{nda_folder_id}/children"
+        f"/drive/items/{target_folder_id}/children"
     )
     items = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
     copied_file = next((f for f in items if f["name"] == filename), None)
@@ -582,7 +589,7 @@ def generate_nda_for_company(company):
     # Upload filled NDA
     upload_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{nda_folder_id}:/{filename}:/content"
+        f"/drive/items/{target_folder_id}:/{filename}:/content"
     )
     with open(filename, "rb") as f:
         requests.put(upload_url, headers=HEADERS_MS, data=f)
@@ -1076,74 +1083,65 @@ def generate_msa_for_company(company):
     props = company["properties"]
     company_name = props.get("name", "Unknown Company")
 
-    # Check if subfolders are allowed for this company
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
-    if not allow_subfolders:
-        print(f"⏩ Skipping MSA generation for vendor/partner: {company_name}")
-        return
 
     contact = fetch_primary_contact_for_msa(company_id)
     contact_status = (contact.get("msa_status") or "").lower().strip()
 
-    # Locate client folder
-    url_fldr = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{CLIENTS_FOLDER_ID}/children"
-    )
-    folders = requests.get(url_fldr, headers=HEADERS_MS).json().get("value", [])
-    client_folder = next((f for f in folders if f["name"] == company_name), None)
-    if not client_folder:
-        send_error_email("MSA Error", f"Folder not found for {company_name}")
-        return
-
-    # Locate MSA subfolder
-    url_sub = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{client_folder['id']}/children"
-    )
-    subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
-    msa_folder = next((f for f in subfolders if f["name"] == "05. MSAs"), None)
-    if not msa_folder:
-        send_error_email("MSA Error", f"MSA subfolder missing for {company_name}")
-        return
-
-    prefix = f"AMZ Risk - MSA - {company_name}"
-
-    # If already exists
-    if msa_file_exists(msa_folder['id'], prefix):
-        if contact_status == "generate":
-            update_contact_msa_status(contact.get("id"))
-        return
-
     if contact_status != "generate":
         return
 
+    # Locate company folder in SharePoint
+    parent_id = VENDORS_PARTNERS_FOLDER_ID if not allow_subfolders else CLIENTS_FOLDER_ID
+    url_fldr = (
+        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
+        f"/drive/items/{parent_id}/children"
+    )
+    folders = requests.get(url_fldr, headers=HEADERS_MS).json().get("value", [])
+    company_folder = next((f for f in folders if f["name"] == company_name), None)
+    if not company_folder:
+        send_error_email("MSA Error", f"Folder not found for {company_name}")
+        return
+
+    # Determine target folder for MSA
+    if allow_subfolders:
+        # Create MSA subfolder if it doesn't exist
+        msa_folder_id = get_or_create_subfolder(
+            company_folder["id"],
+            "05. MSAs",
+            SUBFOLDER_05_MSAS_ID
+        )
+        if not msa_folder_id:
+            send_error_email("MSA Error", f"MSA subfolder missing for {company_name}")
+            return
+        target_folder_id = msa_folder_id
+    else:
+        # Vendors/partners: use company folder directly
+        target_folder_id = company_folder["id"]
+
+    prefix = f"AMZ Risk - MSA - {company_name}"
     date_str = datetime.now().strftime('%Y%m%d')
     filename = f"{prefix} - {date_str}.docx"
-    copy_resp = requests.post(
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{MSA_TEMPLATE_ID}/copy",
-        headers=HEADERS_MS,
-        json={"parentReference": {"id": msa_folder['id']}, "name": filename}
+
+    # Check if file already exists
+    children_url = (
+        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
+        f"/drive/items/{target_folder_id}/children"
     )
-    if copy_resp.status_code not in (200, 202):
+    files = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
+    if any(f["name"] == filename for f in files):
+        update_contact_msa_status(contact.get("id"))
+        return
+
+    # Copy template to target folder
+    copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{MSA_TEMPLATE_ID}/copy"
+    payload = {"parentReference": {"id": target_folder_id}, "name": filename}
+    copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
+    if copy_resp.status_code not in [200, 202]:
         send_error_email("MSA Copy Failed", copy_resp.text)
         return
-
-    # Wait for copy
-    for _ in range(10):
-        if msa_file_exists(msa_folder['id'], prefix):
-            break
-        time.sleep(2)
-    else:
-        send_error_email("MSA Missing", f"Copy missing for {company_name}")
-        return
-
-    # Download and replace placeholders
-    files = requests.get(
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{msa_folder['id']}/children",
-        headers=HEADERS_MS
-    ).json().get("value", [])
+    time.sleep(5)
+    files = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
     new_file = next((f for f in files if f["name"] == filename), None)
     if not new_file:
         send_error_email("MSA Missing", f"Copied MSA not found for {company_name}")
@@ -1152,10 +1150,10 @@ def generate_msa_for_company(company):
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
         f"/drive/items/{new_file['id']}/content"
     )
-    data = requests.get(download_url, headers=HEADERS_MS).content
-    with open(filename, "wb") as fd:
-        fd.write(data)
-
+    file_data = requests.get(download_url, headers=HEADERS_MS).content
+    with open(filename, "wb") as f:
+        f.write(file_data)
+    doc = Document(filename)
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
         "{name}":       company_name,
@@ -1164,33 +1162,25 @@ def generate_msa_for_company(company):
         "{state_list}": props.get("state_list", ""),
         "{zip}":        props.get("zip", ""),
         "{email}":      contact.get("email", ""),
-        "{jobtitle}":   contact.get("jobtitle", ""),
         "{firstname}":  contact.get("firstname", ""),
-        "{lastname}":   contact.get("lastname", "")
+        "{lastname}":   contact.get("lastname", ""),
+        "{jobtitle}":   contact.get("jobtitle", "")
     }
-    doc = Document(filename)
-    for block in iter_block_items(doc):
-        if isinstance(block, Paragraph):
-            replace_placeholder(block, replacements)
-        else:  # Table
-            for row in block.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs:
-                        replace_placeholder(p, replacements)
+    for p in doc.paragraphs:
+        replace_placeholder(p, replacements)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    replace_placeholder(p, replacements)
     doc.save(filename)
-
-    # Upload filled MSA
-    with open(filename, "rb") as fd:
-        requests.put(
-            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-            f"/drive/items/{msa_folder['id']}:/{filename}:/content",
-            headers=HEADERS_MS,
-            data=fd
-        )
-
-    if contact_status == "generate":
-        update_contact_msa_status(contact.get("id"))
-
+    upload_url = (
+        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
+        f"/drive/items/{target_folder_id}:/{filename}:/content"
+    )
+    with open(filename, "rb") as f:
+        requests.put(upload_url, headers=HEADERS_MS, data=f)
+    update_contact_msa_status(contact.get("id"))
     print(f"✅ MSA '{filename}' created and uploaded for {company_name}!")
 
 # Run MSA generation
@@ -1198,3 +1188,14 @@ companies_for_msa = fetch_companies_for_msa()
 for comp in companies_for_msa:
     generate_msa_for_company(comp)
 print("✅ All MSAs processed!")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN EXECUTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# In the main execution, ensure both NDA and MSA generation are called for each company
+companies_list = fetch_all_hubspot_data("companies", COMPANY_FIELDS)
+for comp in companies_list:
+    generate_nda_for_company(comp)
+    generate_msa_for_company(comp)
+print("✅ All NDAs and MSAs processed!")
