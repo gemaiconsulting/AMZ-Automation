@@ -868,17 +868,18 @@ SOW_TEMPLATES = {
 }
 
 def generate_sow_for_deal(deal):
-    """
-    For each deal, generate and upload a SOW if needed.
-    """
     deal_id = deal["id"]
+    sow_status = (deal["properties"].get("sow_status") or "").strip().lower()
+    if sow_status != "generate":
+        return
+
     company_id = fetch_associated_company_id_for_deal(deal_id)
     if not company_id:
         return
     company = fetch_company_data_for_proposal(company_id)
+    contact = fetch_primary_contact_for_proposal(company_id)
     company_name = company.get("name", "Unknown Company")
 
-    # Check if subfolders are allowed for this company
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
     if not allow_subfolders:
         print(f"⏩ Skipping SOW generation for vendor/partner: {company_name}")
@@ -896,35 +897,24 @@ def generate_sow_for_deal(deal):
     owner_id = deal["properties"].get("hubspot_owner_id")
     owner_name, owner_email = fetch_owner_details(owner_id)
 
-    # Locate client folder
-    url_fldr = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{CLIENTS_FOLDER_ID}/children"
-    )
+    url_fldr = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{CLIENTS_FOLDER_ID}/children"
     folders = requests.get(url_fldr, headers=HEADERS_MS).json().get("value", [])
     client_folder = next((f for f in folders if f["name"] == company_name), None)
     if not client_folder:
         return
 
-    # Locate SOW subfolder
-    url_sub = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{client_folder['id']}/children"
+    sow_folder_id = get_or_create_subfolder(
+        client_folder["id"],
+        "04. SOWs",
+        SUBFOLDER_04_SOWS_ID
     )
-    subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
-    sow_folder = next((f for f in subfolders if f["name"] == "04. SOWs"), None)
-    if not sow_folder:
+    if not sow_folder_id:
+        send_error_email("SOW Folder Creation Failed", f"Could not create SOW folder for {company_name}")
         return
 
-    children_url = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{sow_folder['id']}/children"
-    )
+    children_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{sow_folder_id}/children"
     for service_line in service_lines:
-        filename = (
-            f"AMZ Risk - {company_name} - SOW - {service_line} - "
-            f"{datetime.now().strftime('%Y%m%d')}.docx"
-        )
+        filename = f"AMZ Risk - {company_name} - SOW - {service_line} - {datetime.now().strftime('%Y%m%d')}.docx"
         if any(item["name"] == filename for item in requests.get(children_url, headers=HEADERS_MS).json().get("value", [])):
             continue
 
@@ -936,13 +926,12 @@ def generate_sow_for_deal(deal):
         resp = requests.post(
             copy_url,
             headers=HEADERS_MS,
-            json={"parentReference": {"id": sow_folder['id']}, "name": filename}
+            json={"parentReference": {"id": sow_folder_id}, "name": filename}
         )
         if resp.status_code not in (200, 202):
             send_error_email("SOW Copy Failed", resp.json())
             continue
 
-        # Wait for copy
         for _ in range(10):
             items = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
             if any(i["name"] == filename for i in items):
@@ -953,28 +942,25 @@ def generate_sow_for_deal(deal):
             continue
 
         copied = next(i for i in items if i["name"] == filename)
-        download_url = (
-            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-            f"/drive/items/{copied['id']}/content"
-        )
+        download_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{copied['id']}/content"
         data = requests.get(download_url, headers=HEADERS_MS).content
         with open(filename, "wb") as fd:
             fd.write(data)
 
         placeholders = {
             "{proposal___service_line}": service_line,
-            "{today's date}":            datetime.now().strftime("%Y-%m-%d"),
-            "{firstname}":               contact.get("firstname", ""),
-            "{lastname}":                contact.get("lastname", ""),
-            "{jobtitle}":                contact.get("jobtitle", ""),
-            "{email}":                   contact.get("email", ""),
-            "{name}":                    company.get("name", ""),
-            "{address}":                 company.get("address", ""),
-            "{city}":                    company.get("city", ""),
-            "{state_list}":              company.get("state_list", ""),
-            "{zip}":                     company.get("zip", ""),
-            "{amz_rep}":                 owner_name,
-            "{amz_rep_email}":           owner_email
+            "{today's date}": datetime.now().strftime("%Y-%m-%d"),
+            "{firstname}": contact.get("firstname", ""),
+            "{lastname}": contact.get("lastname", ""),
+            "{jobtitle}": contact.get("jobtitle", ""),
+            "{email}": contact.get("email", ""),
+            "{name}": company.get("name", ""),
+            "{address}": company.get("address", ""),
+            "{city}": company.get("city", ""),
+            "{state_list}": company.get("state_list", ""),
+            "{zip}": company.get("zip", ""),
+            "{amz_rep}": owner_name,
+            "{amz_rep_email}": owner_email
         }
 
         doc = Document(filename)
@@ -988,10 +974,7 @@ def generate_sow_for_deal(deal):
                             replace_placeholder(para, placeholders)
         doc.save(filename)
 
-        upload_url = (
-            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-            f"/drive/items/{sow_folder['id']}:/{filename}:/content"
-        )
+        upload_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{sow_folder_id}:/{filename}:/content"
         with open(filename, "rb") as fd:
             requests.put(upload_url, headers=HEADERS_MS, data=fd)
 
