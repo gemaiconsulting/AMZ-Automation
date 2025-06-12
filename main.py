@@ -709,6 +709,8 @@ def generate_proposal_for_deal(deal):
         return
     company = fetch_company_data_for_proposal(company_id)
     company_name = company.get("name", "Unknown Company")
+    contact = fetch_primary_contact_for_proposal(company_id)
+
 
     # Check if subfolders are allowed for this company
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
