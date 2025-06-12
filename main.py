@@ -677,15 +677,15 @@ def update_proposal_status(deal_id):
     if resp.status_code != 200:
         send_error_email("Proposal Status Update Failed", resp.text)
 
-def check_proposal_exists(folder_id, filename):
+def proposal_exists_for_service_line(folder_id, company_name, service_line):
     """
-    Check if a proposal file already exists in the given SharePoint folder.
+    Check if any proposal for the same company and service line already exists,
+    regardless of the date suffix.
     """
+    prefix = f"AMZ Risk - {company_name} - Proposal - {service_line}"
     url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{folder_id}/children"
     resp = requests.get(url, headers=HEADERS_MS)
-    if resp.status_code == 200:
-        return any(item["name"] == filename for item in resp.json().get("value", []))
-    return False
+    return any(item["name"].startswith(prefix) for item in resp.json().get("value", []))
 
 PROPOSAL_TEMPLATES = {
     "Risk Assessment":             PROPOSAL_TEMPLATE_RISK_ASSESSMENT_ID,
@@ -756,7 +756,8 @@ def generate_proposal_for_deal(deal):
             f"AMZ Risk - {company_name} - Proposal - {service_line} - "
             f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
-        if check_proposal_exists(proposals_folder_id, filename):
+        if proposal_exists_for_service_line(proposals_folder_id, company_name, service_line):
+            print(f"⏩ Skipping duplicate proposal for {company_name} - {service_line}")    
             continue
 
         template_id = PROPOSAL_TEMPLATES.get(service_line, PROPOSAL_TEMPLATES["Risk Assessment"])
