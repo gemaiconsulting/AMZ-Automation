@@ -160,15 +160,53 @@ def iter_block_items(parent):
 
 def replace_placeholder(paragraph, replacements):
     """
-    Replace placeholder keys in a paragraph with actual values.
+    Fully replace all placeholders in paragraph, even if broken across multiple runs.
     """
-    text = "".join(run.text for run in paragraph.runs)
+    full_text = "".join(run.text for run in paragraph.runs)
     for key, val in replacements.items():
-        if key in text:
-            text = text.replace(key, val)
-            for run in paragraph.runs:
-                run.text = ""
-            paragraph.runs[0].text = text
+        full_text = full_text.replace(key, val)
+    for i, run in enumerate(paragraph.runs):
+        if i == 0:
+            run.text = full_text
+        else:
+            run.text = ""
+
+def replace_placeholders_in_document(doc, replacements):
+    """
+    Apply replace_placeholder() to every paragraph and table cell in entire document
+    including paragraphs, tables, headers, footers.
+    """
+    # Body paragraphs
+    for p in doc.paragraphs:
+        replace_placeholder(p, replacements)
+
+    # Tables in body
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    replace_placeholder(p, replacements)
+
+    # Headers
+    for section in doc.sections:
+        for p in section.header.paragraphs:
+            replace_placeholder(p, replacements)
+        for table in section.header.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        replace_placeholder(p, replacements)
+
+    # Footers
+    for section in doc.sections:
+        for p in section.footer.paragraphs:
+            replace_placeholder(p, replacements)
+        for table in section.footer.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        replace_placeholder(p, replacements)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HUBSPOT PROPERTY FETCHING
@@ -576,13 +614,7 @@ def generate_nda_for_company(company):
         "{lastname}":  contact.get("lastname", ""),
         "{jobtitle}":  contact.get("jobtitle", "")
     }
-    for p in doc.paragraphs:
-        replace_placeholder(p, placeholders)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    replace_placeholder(p, placeholders)
+    replace_placeholders_in_document(doc, placeholders)
     doc.save(filename)
 
     # Upload filled NDA
@@ -793,7 +825,7 @@ def generate_proposal_for_deal(deal):
 
         placeholders = {
             "{proposal___service_line}": service_line,
-            "{today's date}":            datetime.now().strftime("%Y-%m-%d"),
+            "{today’s date}":            datetime.now().strftime("%Y-%m-%d"),
             "{firstname}":               contact.get("firstname", ""),
             "{lastname}":                contact.get("lastname", ""),
             "{email}":                   contact.get("email", ""),
@@ -807,14 +839,7 @@ def generate_proposal_for_deal(deal):
         }
 
         doc = Document(filename)
-        for block in iter_block_items(doc):
-            if isinstance(block, Paragraph):
-                replace_placeholder(block, placeholders)
-            elif isinstance(block, Table):
-                for row in block.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            replace_placeholder(p, placeholders)
+        replace_placeholders_in_document(doc, placeholders)
         doc.save(filename)
 
         upload_url = (
@@ -876,6 +901,8 @@ def generate_sow_for_deal(deal):
         return
     company = fetch_company_data_for_proposal(company_id)
     company_name = company.get("name", "Unknown Company")
+
+    contact = fetch_primary_contact_for_proposal(company_id)
 
     # Check if subfolders are allowed for this company
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
@@ -993,14 +1020,7 @@ def generate_sow_for_deal(deal):
         }
 
         doc = Document(filename)
-        for block in iter_block_items(doc):
-            if isinstance(block, Paragraph):
-                replace_placeholder(block, placeholders)
-            elif isinstance(block, Table):
-                for row in block.rows:
-                    for cell in row.cells:
-                        for para in cell.paragraphs:
-                            replace_placeholder(para, placeholders)
+        replace_placeholders_in_document(doc, placeholders)
         doc.save(filename)
 
         upload_url = (
@@ -1184,13 +1204,7 @@ def generate_msa_for_company(company):
         "{lastname}":   contact.get("lastname", ""),
         "{jobtitle}":   contact.get("jobtitle", "")
     }
-    for p in doc.paragraphs:
-        replace_placeholder(p, replacements)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    replace_placeholder(p, replacements)
+    replace_placeholders_in_document(doc, replacements)
     doc.save(filename)
     upload_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
