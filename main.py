@@ -245,12 +245,11 @@ def update_or_append_data(existing_data, new_data, unique_field):
     - If a record is new, append it.
     """
     if existing_data is not None:
-        existing_df = pd.DataFrame(existing_data)
+        existing_df = existing_data  # already a DataFrame, no need to convert
         if unique_field in existing_df.columns:
-            merged_df = pd.concat([existing_df, new_data]) \
-                          .drop_duplicates(subset=[unique_field], keep="last")
+            merged_df = pd.concat([existing_df, new_data]).drop_duplicates(subset=[unique_field], keep="last")
         else:
-            print(f"⚠️ Unique field '{unique_field}' not in existing data. Appending all.")
+            print(f"⚠️ Unique field '{unique_field}' not found in existing data. Appending all records.")
             merged_df = pd.concat([existing_df, new_data])
     else:
         merged_df = new_data
@@ -906,15 +905,31 @@ def generate_sow_for_deal(deal):
     if not client_folder:
         return
 
-    # Locate SOW subfolder
+    
+    # Locate or create SOW subfolder on demand
     url_sub = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
         f"/drive/items/{client_folder['id']}/children"
     )
     subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
     sow_folder = next((f for f in subfolders if f["name"] == "04. SOWs"), None)
+
     if not sow_folder:
-        return
+        # Create '04. SOWs' subfolder only if it doesn't exist
+        create_folder_url = (
+            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{client_folder['id']}/children"
+        )
+        folder_payload = {
+            "name": "04. SOWs",
+            "folder": {},
+            "@microsoft.graph.conflictBehavior": "fail"
+        }
+        create_resp = requests.post(create_folder_url, headers=HEADERS_MS, json=folder_payload)
+        if create_resp.status_code in (200, 201):
+            sow_folder = create_resp.json()
+        else:
+            send_error_email("SOW Subfolder Creation Failed", create_resp.text)
+            return
 
     children_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
