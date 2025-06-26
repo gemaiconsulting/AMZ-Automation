@@ -2,7 +2,7 @@
 """
 AMZ-Automation: Fetch data from HubSpot, update Excel, and generate/upload NDAs, Proposals, SOWs, and MSAs to SharePoint.
 """
-
+import json
 import os
 import time
 import re
@@ -35,9 +35,15 @@ SHAREPOINT_SITE_ID   = os.getenv("SHAREPOINT_SITE_ID")
 # HubSpot
 HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 
+# Asana
+ASANA_TOKEN = os.getenv("ASANA_PERSONAL_ACCESS_TOKEN")
+ASANA_TEAM_ID = os.getenv("ASANA_TEAM_ID")
+ASANA_WORKSPACE_ID = os.getenv("ASANA_WORKSPACE_ID")
+
 # OneDrive / Excel file IDs
-CLIENT_DATA_FILE_ID  = os.getenv("CLIENT_DATA_FILE_ID")   # ID of ClientData.xlsx
-TEMPLATES_FOLDER_ID  = os.getenv("TEMPLATES_FOLDER_ID")   # ID of '02. Internal'
+CLIENT_DATA_FILE_ID = os.getenv("CLIENT_DATA_FILE_ID")  # ID of ClientData.xlsx
+TEMPLATES_FOLDER_ID = os.getenv("TEMPLATES_FOLDER_ID")  # ID of '02. Internal'
+
 
 # Subfolder IDs (under '02. Internal')
 SUBFOLDER_01_NDA_ID           = os.getenv("SUBFOLDER_01_NDA_ID")
@@ -147,6 +153,61 @@ def send_error_email(subject, message):
             server.sendmail(sender, recipient, msg.as_string())
     except Exception as e:
         print(f"❌ Failed to send error email: {e}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SYNC CLOSED-WON DEALS TO ASANA
+# ─────────────────────────────────────────────────────────────────────────────
+
+ASANA_HEADERS = {
+    "Authorization": f"Bearer {ASANA_TOKEN}",
+    "Content-Type": "application/json"
+}
+
+def get_existing_asana_projects(team_gid):
+    url = f"https://app.asana.com/api/1.0/teams/{team_gid}/projects?archived=false"
+    res = requests.get(url, headers=ASANA_HEADERS)
+    if res.status_code == 200:
+        return set(project["name"] for project in res.json().get("data", []))
+    else:
+        print("❌ Failed to fetch Asana projects:", res.text)
+        return set()
+
+def create_asana_project(project_name, workspace_gid, team_gid, existing_projects):
+    if project_name in existing_projects:
+        print(f"⏭️ Skipping '{project_name}' — already exists in Asana.")
+        return
+    url = "https://app.asana.com/api/1.0/projects"
+    data = {
+        "data": {
+            "name": project_name,
+            "workspace": workspace_gid,
+            "team": team_gid
+        }
+    }
+    res = requests.post(url, headers=ASANA_HEADERS, json=data)
+    if res.status_code == 201:
+        print(f"✅ Created Asana project: {project_name}")
+    else:
+        print(f"❌ Failed to create Asana project: {res.text}")
+
+def sync_closed_won_deals_to_asana():
+    print("🔄 Fetching Closed-Won deals from HubSpot...")
+    url = "https://api.hubapi.com/crm/v3/objects/deals?properties=dealname,dealstage&limit=100"
+    res = requests.get(url, headers=HEADERS_HS)
+    if res.status_code != 200:
+        print("❌ HubSpot API error:", res.text)
+        return
+    deals = res.json().get("results", [])
+    existing_projects = get_existing_asana_projects(ASANA_TEAM_ID)
+    for deal in deals:
+        deal_name = deal["properties"].get("dealname", "Untitled Deal")
+        deal_stage = deal["properties"].get("dealstage", "")
+        if deal_stage == "contractsent":
+            print(f"🎯 Deal '{deal_name}' is Closed-Won — checking Asana...")
+            create_asana_project(deal_name, ASANA_WORKSPACE_ID, ASANA_TEAM_ID, existing_projects)
+
+
+
 
 def iter_block_items(parent):
     """
@@ -1227,7 +1288,11 @@ print("✅ All MSAs processed!")
 
 # In the main execution, ensure both NDA and MSA generation are called for each company
 companies_list = fetch_all_hubspot_data("companies", COMPANY_FIELDS)
+
 for comp in companies_list:
     generate_nda_for_company(comp)
     generate_msa_for_company(comp)
 print("✅ All NDAs and MSAs processed!")
+
+# Sync Closed-Won deals to Asana
+sync_closed_won_deals_to_asana()
