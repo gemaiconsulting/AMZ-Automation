@@ -154,6 +154,32 @@ def send_error_email(subject, message):
     except Exception as e:
         print(f"❌ Failed to send error email: {e}")
 
+def update_lead_source_for_contact(contact_id):
+    """
+    Set the contact's lead_source property to 'Website Contact Form'.
+    """
+    url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}"
+    payload = {"properties": {"lead_source": "Website Contact Form"}}
+    resp = requests.patch(url, headers=HEADERS_HS, json=payload)
+    if resp.status_code != 200:
+        send_error_email("Lead Source Update Failed", resp.text)
+    else:
+        print(f"✅ Updated Lead Source for contact {contact_id}")
+
+def update_lead_source_for_website_contacts(contacts):
+    """
+    For all contacts, if 'message' exists and is not empty, set lead_source to 'Website Contact Form'.
+    """
+    for c in contacts:
+        contact_id = c.get("id")
+        properties = c.get("properties", {})
+        message = properties.get("message", "")
+        lead_source = properties.get("lead_source", "")
+        # Only update if message is non-empty and lead_source is not already set correctly
+        if message and lead_source != "Website Contact Form":
+            update_lead_source_for_contact(contact_id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SYNC CLOSED-WON DEALS TO ASANA
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +383,8 @@ def update_or_append_data(existing_data, new_data, unique_field):
 
 # Fetch all HubSpot data
 contacts = fetch_all_hubspot_data("contacts", CONTACT_FIELDS)
+update_lead_source_for_website_contacts(contacts)   # <--- add here!
+
 companies = fetch_all_hubspot_data("companies", COMPANY_FIELDS)
 deals    = fetch_all_hubspot_data("deals", DEAL_FIELDS)
 
