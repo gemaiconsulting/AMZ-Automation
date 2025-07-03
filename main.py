@@ -754,7 +754,7 @@ def fetch_company_data_for_proposal(company_id):
     """
     url = (
         f"https://api.hubapi.com/crm/v3/objects/companies/{company_id}?properties="
-        "name,city,state_list,zip,address"
+        "name,legal_entity_name,city,state_list,zip,address"
     )
     resp = requests.get(url, headers=HEADERS_HS)
     return resp.json().get("properties", {}) if resp.status_code == 200 else {}
