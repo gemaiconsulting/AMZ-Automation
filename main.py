@@ -693,7 +693,7 @@ def generate_nda_for_company(company):
 
     doc = Document(filename)
     placeholders = {
-        "{name}":     props.get("name", ""),
+        "{legal_entity_name}": props.get("legal_entity_name", ""),
         "{address}":  props.get("address", ""),
         "{city}":     props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
@@ -918,7 +918,7 @@ def generate_proposal_for_deal(deal):
             "{firstname}":               contact.get("firstname", ""),
             "{lastname}":                contact.get("lastname", ""),
             "{email}":                   contact.get("email", ""),
-            "{name}":                    company.get("name", ""),
+            "{legal_entity_name}":       company.get("legal_entity_name", ""),
             "{address}":                 company.get("address", ""),
             "{city}":                    company.get("city", ""),
             "{state_list}":              company.get("state_list", ""),
@@ -1099,7 +1099,7 @@ def generate_sow_for_deal(deal):
             "{lastname}":                contact.get("lastname", ""),
             "{jobtitle}":                contact.get("jobtitle", ""),
             "{email}":                   contact.get("email", ""),
-            "{name}":                    company.get("name", ""),
+            "{legal_entity_name}":       company.get("legal_entity_name", ""),
             "{address}":                 company.get("address", ""),
             "{city}":                    company.get("city", ""),
             "{state_list}":              company.get("state_list", ""),
@@ -1283,7 +1283,7 @@ def generate_msa_for_company(company):
     doc = Document(filename)
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
-        "{name}":       company_name,
+        "legal_entity_name}":       company_name,
         "{address}":    props.get("address", ""),
         "{city}":       props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
