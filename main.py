@@ -661,8 +661,15 @@ def generate_nda_for_company(company):
         # Vendors/partners: use company folder directly
         target_folder_id = company_folder["id"]
 
-    contact_name = f"{contact.get('firstname','').strip()}_{contact.get('lastname','').strip()}"
-    filename = f"AMZ Risk_{contact_type.title()} NDA_{contact_name}_{datetime.now().strftime('%Y%m%d')}.docx"
+    date_str = datetime.now().strftime('%Y%m%d')
+
+    # --- Fix: Mutual NDA naming for Prospects
+    if contact_type == "prospect":
+        filename = f"AMZ Risk_Mutual NDA_{company_name}_{date_str}.docx"
+    else:
+        contact_name = f"{contact.get('firstname','').strip()}_{contact.get('lastname','').strip()}"
+        filename = f"AMZ Risk_{contact_type.title()} NDA_{contact_name}_{date_str}.docx"
+
     copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
     payload = {"parentReference": {"id": target_folder_id}, "name": filename}
     copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
@@ -1292,7 +1299,7 @@ def generate_msa_for_company(company):
     doc = Document(filename)
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
-        "{legal_entity_name}":       company_name,
+        "{legal_entity_name}": props.get("legal_entity_name", ""),
         "{address}":    props.get("address", ""),
         "{city}":       props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
