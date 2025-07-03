@@ -651,7 +651,7 @@ def generate_nda_for_company(company):
         # Create NDA subfolder if it doesn't exist
         nda_folder_id = get_or_create_subfolder(
             company_folder["id"],
-            "01. NDA",
+            "NDA",
             SUBFOLDER_01_NDA_ID
         )
         if not nda_folder_id:
@@ -863,7 +863,7 @@ def generate_proposal_for_deal(deal):
     # Create Proposals subfolder if it doesn't exist
     proposals_folder_id = get_or_create_subfolder(
         client_folder["id"],
-        "02. Proposals",
+        "Proposals",
         SUBFOLDER_02_PROPOSALS_ID
     )
     if not proposals_folder_id:
@@ -1242,7 +1242,7 @@ def generate_msa_for_company(company):
         # Create MSA subfolder if it doesn't exist
         msa_folder_id = get_or_create_subfolder(
             company_folder["id"],
-            "05. MSAs",
+            "MSAs",
             SUBFOLDER_05_MSAS_ID
         )
         if not msa_folder_id:
