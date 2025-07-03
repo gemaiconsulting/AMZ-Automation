@@ -251,7 +251,7 @@ def replace_placeholder(paragraph, replacements):
     """
     full_text = "".join(run.text for run in paragraph.runs)
     for key, val in replacements.items():
-        full_text = full_text.replace(key, val)
+        full_text = full_text.replace(key, str(val) if val is not None else "")
     for i, run in enumerate(paragraph.runs):
         if i == 0:
             run.text = full_text
