@@ -1220,9 +1220,11 @@ def generate_msa_for_company(company):
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
 
     contact = fetch_primary_contact_for_msa(company_id)
+    company_status = (props.get("msa_status") or "").lower().strip()
     contact_status = (contact.get("msa_status") or "").lower().strip()
 
-    if contact_status != "generate":
+    # Trigger if EITHER is "generate"
+    if company_status != "generate" and contact_status != "generate":
         return
 
     # Locate company folder in SharePoint
@@ -1239,7 +1241,6 @@ def generate_msa_for_company(company):
 
     # Determine target folder for MSA
     if allow_subfolders:
-        # Create MSA subfolder if it doesn't exist
         msa_folder_id = get_or_create_subfolder(
             company_folder["id"],
             "MSAs",
@@ -1250,7 +1251,6 @@ def generate_msa_for_company(company):
             return
         target_folder_id = msa_folder_id
     else:
-        # Vendors/partners: use company folder directly
         target_folder_id = company_folder["id"]
 
     prefix = f"AMZ Risk_MSA_{company_name}"
@@ -1264,7 +1264,9 @@ def generate_msa_for_company(company):
     )
     files = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
     if any(f["name"] == filename for f in files):
+        # Even if it already exists, ensure both are marked as Generated
         update_contact_msa_status(contact.get("id"))
+        update_company_msa_status(company_id)
         return
 
     # Copy template to target folder
@@ -1308,7 +1310,9 @@ def generate_msa_for_company(company):
     )
     with open(filename, "rb") as f:
         requests.put(upload_url, headers=HEADERS_MS, data=f)
+    # IMPORTANT: Update BOTH statuses after successful generation
     update_contact_msa_status(contact.get("id"))
+    update_company_msa_status(company_id)
     print(f"✅ MSA '{filename}' created and uploaded for {company_name}!")
 
 # Run MSA generation
