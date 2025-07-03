@@ -980,6 +980,12 @@ SOW_TEMPLATES = {
     "Consulting Services":        SOW_TEMPLATE_CONSULTING_SERVICES_ID
 }
 
+def sow_exists_for_service_line(folder_id, company_name, service_line):
+    prefix = f"AMZ Risk - {company_name} - SOW - {service_line}"
+    url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{folder_id}/children"
+    resp = requests.get(url, headers=HEADERS_MS)
+    return any(item["name"].startswith(prefix) for item in resp.json().get("value", []))
+
 def generate_sow_for_deal(deal):
     """
     For each deal, generate and upload a SOW if needed.
@@ -1051,11 +1057,18 @@ def generate_sow_for_deal(deal):
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
         f"/drive/items/{sow_folder['id']}/children"
     )
+    
     for service_line in service_lines:
+    # NEW: Skip if any SOW already exists for this service line (date-agnostic)
+    if sow_exists_for_service_line(sow_folder['id'], company_name, service_line):
+        print(f"⏩ Skipping duplicate SOW for {company_name} - {service_line}")
+        continue
+
         filename = (
-            f"AMZ Risk - {company_name} - SOW - {service_line} - "
-            f"{datetime.now().strftime('%Y%m%d')}.docx"
+        f"AMZ Risk - {company_name} - SOW - {service_line} - "
+        f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
+    
         if any(item["name"] == filename for item in requests.get(children_url, headers=HEADERS_MS).json().get("value", [])):
             continue
 
