@@ -1222,6 +1222,9 @@ def generate_msa_for_company(company):
     """
     company_id = company["id"]
     props = company["properties"]
+
+    # Use Legal Entity Name for document naming, fallback to Company Name if blank
+    legal_entity_name = props.get("legal_entity_name", "").strip() or props.get("name", "Unknown Company")
     company_name = props.get("name", "Unknown Company")
 
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
@@ -1234,7 +1237,7 @@ def generate_msa_for_company(company):
     if company_status != "generate" and contact_status != "generate":
         return
 
-    # Locate company folder in SharePoint
+    # Locate company folder in SharePoint (still based on Company Name)
     parent_id = VENDORS_PARTNERS_FOLDER_ID if not allow_subfolders else CLIENTS_FOLDER_ID
     url_fldr = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
@@ -1260,7 +1263,8 @@ def generate_msa_for_company(company):
     else:
         target_folder_id = company_folder["id"]
 
-    prefix = f"AMZ Risk_MSA_{company_name}"
+    # Use legal_entity_name for file naming
+    prefix = f"AMZ Risk_MSA_{legal_entity_name}"
     date_str = datetime.now().strftime('%Y%m%d')
     filename = f"{prefix}_{date_str}.docx"
 
@@ -1287,7 +1291,7 @@ def generate_msa_for_company(company):
     files = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
     new_file = next((f for f in files if f["name"] == filename), None)
     if not new_file:
-        send_error_email("MSA Missing", f"Copied MSA not found for {company_name}")
+        send_error_email("MSA Missing", f"Copied MSA not found for {legal_entity_name}")
         return
     download_url = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
@@ -1299,7 +1303,7 @@ def generate_msa_for_company(company):
     doc = Document(filename)
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
-        "{legal_entity_name}": props.get("legal_entity_name", ""),
+        "{legal_entity_name}": legal_entity_name,
         "{address}":    props.get("address", ""),
         "{city}":       props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
@@ -1320,7 +1324,7 @@ def generate_msa_for_company(company):
     # IMPORTANT: Update BOTH statuses after successful generation
     update_contact_msa_status(contact.get("id"))
     update_company_msa_status(company_id)
-    print(f"✅ MSA '{filename}' created and uploaded for {company_name}!")
+    print(f"✅ MSA '{filename}' created and uploaded for {legal_entity_name}!")
 
 # Run MSA generation
 companies_for_msa = fetch_companies_for_msa()
