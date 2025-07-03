@@ -1290,7 +1290,7 @@ def generate_msa_for_company(company):
     doc = Document(filename)
     replacements = {
         "{date}":       datetime.now().strftime("%Y-%m-%d"),
-        "legal_entity_name}":       company_name,
+        "{legal_entity_name}":       company_name,
         "{address}":    props.get("address", ""),
         "{city}":       props.get("city", ""),
         "{state_list}": props.get("state_list", ""),
