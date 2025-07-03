@@ -1060,7 +1060,7 @@ def generate_sow_for_deal(deal):
     
     for service_line in service_lines:
     # NEW: Skip if any SOW already exists for this service line (date-agnostic)
-    if sow_exists_for_service_line(sow_folder['id'], company_name, service_line):
+        if sow_exists_for_service_line(sow_folder['id'], company_name, service_line):
         print(f"⏩ Skipping duplicate SOW for {company_name} - {service_line}")
         continue
 
