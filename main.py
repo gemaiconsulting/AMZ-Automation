@@ -662,7 +662,7 @@ def generate_nda_for_company(company):
         target_folder_id = company_folder["id"]
 
     contact_name = f"{contact.get('firstname','').strip()}_{contact.get('lastname','').strip()}"
-    filename = f"AMZ Risk - {contact_type.title()} NDA - {contact_name} - {datetime.now().strftime('%Y%m%d')}.docx"
+    filename = f"AMZ Risk_{contact_type.title()} NDA_{contact_name}_{datetime.now().strftime('%Y%m%d')}.docx"
     copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
     payload = {"parentReference": {"id": target_folder_id}, "name": filename}
     copy_resp = requests.post(copy_url, headers=HEADERS_MS, json=payload)
@@ -802,7 +802,7 @@ def proposal_exists_for_service_line(folder_id, company_name, service_line):
     Check if any proposal for the same company and service line already exists,
     regardless of the date suffix.
     """
-    prefix = f"AMZ Risk - {company_name} - Proposal - {service_line}"
+    prefix = f"AMZ Risk_{company_name}_Proposal_{service_line}"
     url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{folder_id}/children"
     resp = requests.get(url, headers=HEADERS_MS)
     return any(item["name"].startswith(prefix) for item in resp.json().get("value", []))
@@ -875,7 +875,7 @@ def generate_proposal_for_deal(deal):
     )
     for service_line in service_lines:
         filename = (
-            f"AMZ Risk - {company_name} - Proposal - {service_line} - "
+            f"AMZ Risk_{company_name}_Proposal_{service_line}_"
             f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
         if proposal_exists_for_service_line(proposals_folder_id, company_name, service_line):
@@ -1053,7 +1053,7 @@ def generate_sow_for_deal(deal):
     )
     for service_line in service_lines:
         filename = (
-            f"AMZ Risk - {company_name} - SOW - {service_line} - "
+            f"AMZ Risk_{company_name}_SOW_{service_line}_"
             f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
         if any(item["name"] == filename for item in requests.get(children_url, headers=HEADERS_MS).json().get("value", [])):
@@ -1246,9 +1246,9 @@ def generate_msa_for_company(company):
         # Vendors/partners: use company folder directly
         target_folder_id = company_folder["id"]
 
-    prefix = f"AMZ Risk - MSA - {company_name}"
+    prefix = f"AMZ Risk_MSA_{company_name}"
     date_str = datetime.now().strftime('%Y%m%d')
-    filename = f"{prefix} - {date_str}.docx"
+    filename = f"{prefix}_{date_str}.docx"
 
     # Check if file already exists
     children_url = (
