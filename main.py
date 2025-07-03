@@ -874,78 +874,78 @@ def generate_proposal_for_deal(deal):
         f"/drive/items/{proposals_folder_id}/children"
     )
     for service_line in service_lines:
-    # NEW: Skip if any SOW already exists for this service line (date-agnostic)
-    if sow_exists_for_service_line(sow_folder['id'], company_name, service_line):
-        print(f"⏩ Skipping duplicate SOW for {company_name} - {service_line}")
-        continue
+        filename = (
+            f"AMZ Risk - {company_name} - Proposal - {service_line} - "
+            f"{datetime.now().strftime('%Y%m%d')}.docx"
+        )
+        if proposal_exists_for_service_line(proposals_folder_id, company_name, service_line):
+            print(f"⏩ Skipping duplicate proposal for {company_name} - {service_line}")    
+            continue
 
-    filename = (
-        f"AMZ Risk - {company_name} - SOW - {service_line} - "
-        f"{datetime.now().strftime('%Y%m%d')}.docx"
-    )
+        template_id = PROPOSAL_TEMPLATES.get(service_line, PROPOSAL_TEMPLATES["Risk Assessment"])
+        copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
+        copy_resp = requests.post(
+            copy_url,
+            headers=HEADERS_MS,
+            json={"parentReference": {"id": proposals_folder_id}, "name": filename}
+        )
+        if copy_resp.status_code not in (200, 202):
+            send_error_email("Proposal Copy Failed", copy_resp.text)
+            continue
 
-    template_id = SOW_TEMPLATES.get(service_line)
-    if not template_id:
-        continue
+        # Wait for copy to complete
+        for _ in range(10):
+            items = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
+            if any(item["name"] == filename for item in items):
+                break
+            time.sleep(2)
+        else:
+            send_error_email("Proposal Copy Timeout", f"Copy timed out for {filename}")
+            continue
 
-    copy_url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{template_id}/copy"
-    resp = requests.post(
-        copy_url,
-        headers=HEADERS_MS,
-        json={"parentReference": {"id": sow_folder['id']}, "name": filename}
-    )
-    if resp.status_code not in (200, 202):
-        send_error_email("SOW Copy Failed", resp.json())
-        continue
+        copied = next(item for item in items if item["name"] == filename)
+        download_url = (
+            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
+            f"/drive/items/{copied['id']}/content"
+        )
+        data = requests.get(download_url, headers=HEADERS_MS).content
+        with open(filename, "wb") as fd:
+            fd.write(data)
 
-    # Wait for copy
-    for _ in range(10):
-        items = requests.get(children_url, headers=HEADERS_MS).json().get("value", [])
-        if any(i["name"] == filename for i in items):
-            break
-        time.sleep(2)
-    else:
-        send_error_email("SOW Copy Timeout", f"Copy timed out for {filename}")
-        continue
+        placeholders = {
+            "{proposal___service_line}": service_line,
+            "{today’s date}":            datetime.now().strftime("%Y-%m-%d"),
+            "{firstname}":               contact.get("firstname", ""),
+            "{lastname}":                contact.get("lastname", ""),
+            "{email}":                   contact.get("email", ""),
+            "{name}":                    company.get("name", ""),
+            "{address}":                 company.get("address", ""),
+            "{city}":                    company.get("city", ""),
+            "{state_list}":              company.get("state_list", ""),
+            "{zip}":                     company.get("zip", ""),
+            "{amz_rep}":                 owner_name,
+            "{amz_rep_email}":           owner_email
+        }
 
-    copied = next(i for i in items if i["name"] == filename)
-    download_url = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{copied['id']}/content"
-    )
-    data = requests.get(download_url, headers=HEADERS_MS).content
-    with open(filename, "wb") as fd:
-        fd.write(data)
+        doc = Document(filename)
+        replace_placeholders_in_document(doc, placeholders)
+        doc.save(filename)
 
-    placeholders = {
-        "{proposal___service_line}": service_line,
-        "{today's date}":            datetime.now().strftime("%Y-%m-%d"),
-        "{firstname}":               contact.get("firstname", ""),
-        "{lastname}":                contact.get("lastname", ""),
-        "{jobtitle}":                contact.get("jobtitle", ""),
-        "{email}":                   contact.get("email", ""),
-        "{name}":                    company.get("name", ""),
-        "{address}":                 company.get("address", ""),
-        "{city}":                    company.get("city", ""),
-        "{state_list}":              company.get("state_list", ""),
-        "{zip}":                     company.get("zip", ""),
-        "{amz_rep}":                 owner_name,
-        "{amz_rep_email}":           owner_email
-    }
+        upload_url = (
+            f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
+            f"/drive/items/{proposals_folder_id}:/{filename}:/content"
+        )
+        with open(filename, "rb") as fd:
+            requests.put(upload_url, headers=HEADERS_MS, data=fd)
 
-    doc = Document(filename)
-    replace_placeholders_in_document(doc, placeholders)
-    doc.save(filename)
+        update_proposal_status(deal_id)
+        print(f"✅ Proposal '{filename}' uploaded for {company_name}!")
 
-    upload_url = (
-        f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
-        f"/drive/items/{sow_folder['id']}:/{filename}:/content"
-    )
-    with open(filename, "rb") as fd:
-        requests.put(upload_url, headers=HEADERS_MS, data=fd)
-
-    update_sow_status(deal_id)
-    print(f"✅ SOW '{filename}' uploaded for {company_name}!")
+# Run proposal generation
+deals_list = fetch_deals_for_proposal()
+for deal in deals_list:
+    generate_proposal_for_deal(deal)
+print("✅ All proposals processed!")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SOW GENERATION
@@ -979,12 +979,6 @@ SOW_TEMPLATES = {
     "Training":                   SOW_TEMPLATE_TRAINING_ID,
     "Consulting Services":        SOW_TEMPLATE_CONSULTING_SERVICES_ID
 }
-
-def sow_exists_for_service_line(folder_id, company_name, service_line):
-    prefix = f"AMZ Risk - {company_name} - SOW - {service_line}"
-    url = f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{folder_id}/children"
-    resp = requests.get(url, headers=HEADERS_MS)
-    return any(item["name"].startswith(prefix) for item in resp.json().get("value", []))
 
 def generate_sow_for_deal(deal):
     """
@@ -1057,18 +1051,11 @@ def generate_sow_for_deal(deal):
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
         f"/drive/items/{sow_folder['id']}/children"
     )
-    
     for service_line in service_lines:
-    # NEW: Skip if any SOW already exists for this service line (date-agnostic)
-        if sow_exists_for_service_line(sow_folder['id'], company_name, service_line):
-        print(f"⏩ Skipping duplicate SOW for {company_name} - {service_line}")
-        continue
-
         filename = (
-        f"AMZ Risk - {company_name} - SOW - {service_line} - "
-        f"{datetime.now().strftime('%Y%m%d')}.docx"
+            f"AMZ Risk - {company_name} - SOW - {service_line} - "
+            f"{datetime.now().strftime('%Y%m%d')}.docx"
         )
-    
         if any(item["name"] == filename for item in requests.get(children_url, headers=HEADERS_MS).json().get("value", [])):
             continue
 
