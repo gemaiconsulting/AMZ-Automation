@@ -983,14 +983,20 @@ SOW_TEMPLATES = {
 def generate_sow_for_deal(deal):
     """
     For each deal, generate and upload a SOW if needed.
+    Only runs if sow_status is 'Generate', and updates the status to 'Generated' after creation.
     """
+    # Only proceed if SOW status is "Generate"
+    status = deal["properties"].get("sow_status", "").strip().lower()
+    if status != "generate":
+        return
+
     deal_id = deal["id"]
     company_id = fetch_associated_company_id_for_deal(deal_id)
     if not company_id:
         return
+
     company = fetch_company_data_for_proposal(company_id)
     company_name = company.get("name", "Unknown Company")
-
     contact = fetch_primary_contact_for_proposal(company_id)
 
     # Check if subfolders are allowed for this company
@@ -1021,22 +1027,21 @@ def generate_sow_for_deal(deal):
     if not client_folder:
         return
 
-    
-    # Locate or create SOW subfolder on demand
+    # Locate or create SOW subfolder on demand (removing number from folder name)
     url_sub = (
         f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}"
         f"/drive/items/{client_folder['id']}/children"
     )
     subfolders = requests.get(url_sub, headers=HEADERS_MS).json().get("value", [])
-    sow_folder = next((f for f in subfolders if f["name"] == "04. SOWs"), None)
+    sow_folder = next((f for f in subfolders if f["name"] == "SOWs"), None)
 
     if not sow_folder:
-        # Create '04. SOWs' subfolder only if it doesn't exist
+        # Create 'SOWs' subfolder only if it doesn't exist
         create_folder_url = (
             f"{GRAPH_API_BASE_URL}/sites/{SHAREPOINT_SITE_ID}/drive/items/{client_folder['id']}/children"
         )
         folder_payload = {
-            "name": "04. SOWs",
+            "name": "SOWs",
             "folder": {},
             "@microsoft.graph.conflictBehavior": "fail"
         }
@@ -1052,9 +1057,9 @@ def generate_sow_for_deal(deal):
         f"/drive/items/{sow_folder['id']}/children"
     )
     for service_line in service_lines:
+        # NEW NAMING CONVENTION: AMZ Risk_SOW_[CompanyName]_[ServiceLine]_[Date].docx
         filename = (
-            f"AMZ Risk_{company_name}_SOW_{service_line}_"
-            f"{datetime.now().strftime('%Y%m%d')}.docx"
+            f"AMZ Risk_SOW_{company_name}_{service_line}_{datetime.now().strftime('%Y%m%d')}.docx"
         )
         if any(item["name"] == filename for item in requests.get(children_url, headers=HEADERS_MS).json().get("value", [])):
             continue
@@ -1119,8 +1124,10 @@ def generate_sow_for_deal(deal):
         with open(filename, "rb") as fd:
             requests.put(upload_url, headers=HEADERS_MS, data=fd)
 
+        # Set SOW status to "Generated" after successful creation
         update_sow_status(deal_id)
         print(f"✅ SOW '{filename}' uploaded for {company_name}!")
+
 
 # Run SOW generation
 deals_for_sow = fetch_deals_for_sow()
