@@ -1224,7 +1224,7 @@ def generate_msa_for_company(company):
     props = company["properties"]
 
     # Use Legal Entity Name for document naming, fallback to Company Name if blank
-    legal_entity_name = props.get("legal_entity_name", "").strip() or props.get("name", "Unknown Company")
+    legal_entity_name = (props.get("legal_entity_name") or "").strip() or props.get("name", "Unknown Company")
     company_name = props.get("name", "Unknown Company")
 
     allow_subfolders = client_folders.get(company_name, {}).get("allow_subfolders", True)
